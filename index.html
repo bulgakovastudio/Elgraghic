@@ -243,12 +243,35 @@
     <div class="app-container">
         <div class="toolbar">
             <div class="tool-section">
+                <h3>📁 Carica File</h3>
+                <div class="file-upload-container">
+                    <input type="file" id="fileInput" accept=".jpg,.jpeg,.png,.pdf" style="display: none;">
+                    <button class="action-btn" id="uploadBtn" style="background: linear-gradient(45deg, #4ecdc4, #44a08d); color: white; box-shadow: 0 4px 15px rgba(78, 205, 196, 0.3); margin-bottom: 10px;">📤 Carica Immagine/PDF</button>
+                    <div id="fileInfo" style="font-size: 12px; color: #666; margin-top: 5px; display: none;"></div>
+                </div>
+            </div>
+
+            <div class="tool-section">
                 <h3>🛠️ Strumenti</h3>
                 <div class="tool-buttons">
                     <button class="tool-btn active" data-tool="brush">✏️ Pennello</button>
                     <button class="tool-btn" data-tool="line">📏 Linea</button>
                     <button class="tool-btn" data-tool="rectangle">⬜ Rettangolo</button>
                     <button class="tool-btn" data-tool="circle">⭕ Cerchio</button>
+                    <button class="tool-btn" data-tool="text">📝 Testo</button>
+                    <button class="tool-btn" data-tool="eraser">🧹 Gomma</button>
+                    <button class="tool-btn" data-tool="lasso">🪢 Lasso</button>
+                    <button class="tool-btn" data-tool="select">📦 Selezione</button>
+                </div>
+            </div>
+
+            <div class="tool-section" id="lassoActions" style="display: none;">
+                <h3>🪢 Azioni Lasso</h3>
+                <div class="action-buttons">
+                    <button class="action-btn" id="cropSelection" style="background: linear-gradient(45deg, #ff9a56, #ff6b35); color: white; box-shadow: 0 4px 15px rgba(255, 154, 86, 0.3); margin-bottom: 8px;">✂️ Ritaglia</button>
+                    <button class="action-btn" id="deleteSelection" style="background: linear-gradient(45deg, #ff6b6b, #ee5a52); color: white; box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3); margin-bottom: 8px;">🗑️ Elimina</button>
+                    <button class="action-btn" id="copySelection" style="background: linear-gradient(45deg, #4ecdc4, #44a08d); color: white; box-shadow: 0 4px 15px rgba(78, 205, 196, 0.3); margin-bottom: 8px;">📋 Copia</button>
+                    <button class="action-btn" id="clearSelection" style="background: linear-gradient(45deg, #a8a8a8, #888888); color: white; box-shadow: 0 4px 15px rgba(168, 168, 168, 0.3);">❌ Annulla</button>
                 </div>
             </div>
 
@@ -295,7 +318,12 @@
         <div class="canvas-container">
             <canvas id="canvas" width="800" height="600"></canvas>
             <div class="canvas-info">
-                <p>💡 Usa gli strumenti a sinistra per disegnare. Clicca e trascina per creare!</p>
+                <p>💡 <strong>Nuove funzionalità avanzate:</strong></p>
+                <p>📤 <strong>Carica file:</strong> Importa JPEG, PNG o PDF come base</p>
+                <p>🪢 <strong>Lasso:</strong> Traccia una selezione libera intorno all'area desiderata</p>
+                <p>📦 <strong>Selezione:</strong> Seleziona aree rettangolari per operazioni precise</p>
+                <p>✂️ <strong>Ritaglia/Elimina/Copia:</strong> Lavora con le tue selezioni</p>
+                <p>📝 <strong>Strumento testo:</strong> Clicca per aggiungere testo (premi Invio per confermare)</p>
             </div>
         </div>
     </div>
@@ -311,15 +339,134 @@
         let opacity = 100;
         let startX, startY;
         let hasTransparentBackground = false;
+        let backgroundImage = null;
+        let isTyping = false;
+        let textInput = null;
+        let lassoPath = [];
+        let isLassoActive = false;
+        let selectionBounds = null;
+        let selectedImageData = null;
+        let overlayCanvas = null;
+        let overlayCtx = null;
 
         // Inizializza canvas
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
 
+        // Crea overlay canvas per le selezioni
+        function createOverlayCanvas() {
+            if (!overlayCanvas) {
+                overlayCanvas = document.createElement('canvas');
+                overlayCtx = overlayCanvas.getContext('2d');
+                overlayCanvas.style.position = 'absolute';
+                overlayCanvas.style.pointerEvents = 'none';
+                overlayCanvas.style.border = '3px solid #667eea';
+                overlayCanvas.style.borderRadius = '10px';
+                overlayCanvas.style.zIndex = '10';
+                canvas.parentNode.appendChild(overlayCanvas);
+            }
+            overlayCanvas.width = canvas.width;
+            overlayCanvas.height = canvas.height;
+            overlayCanvas.style.width = canvas.style.width;
+            overlayCanvas.style.height = canvas.style.height;
+            overlayCanvas.style.left = canvas.offsetLeft + 'px';
+            overlayCanvas.style.top = canvas.offsetTop + 'px';
+        }
+
+        // Caricamento PDF.js per gestire i PDF
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        document.head.appendChild(script);
+
+        // Funzione per ridimensionare il canvas mantenendo le proporzioni
+        function resizeCanvasToImage(img) {
+            const maxWidth = 800;
+            const maxHeight = 600;
+            
+            let { width, height } = img;
+            
+            // Calcola le nuove dimensioni mantenendo le proporzioni
+            if (width > maxWidth || height > maxHeight) {
+                const ratio = Math.min(maxWidth / width, maxHeight / height);
+                width = width * ratio;
+                height = height * ratio;
+            }
+            
+            canvas.width = width;
+            canvas.height = height;
+            canvas.style.width = width + 'px';
+            canvas.style.height = height + 'px';
+        }
+
+        // Funzione per caricare immagine
+        function loadImage(file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    backgroundImage = img;
+                    resizeCanvasToImage(img);
+                    redrawCanvas();
+                    
+                    document.getElementById('fileInfo').style.display = 'block';
+                    document.getElementById('fileInfo').textContent = `Caricato: ${file.name} (${img.width}x${img.height}px)`;
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // Funzione per caricare PDF
+        async function loadPDF(file) {
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+                const page = await pdf.getPage(1); // Carica la prima pagina
+                
+                const viewport = page.getViewport({ scale: 1.5 });
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                canvas.style.width = Math.min(viewport.width, 800) + 'px';
+                canvas.style.height = Math.min(viewport.height, 600) + 'px';
+                
+                // Crea un canvas temporaneo per il PDF
+                const tempCanvas = document.createElement('canvas');
+                const tempCtx = tempCanvas.getContext('2d');
+                tempCanvas.width = viewport.width;
+                tempCanvas.height = viewport.height;
+                
+                await page.render({
+                    canvasContext: tempCtx,
+                    viewport: viewport
+                }).promise;
+                
+                // Crea un'immagine dal PDF renderizzato
+                const img = new Image();
+                img.onload = function() {
+                    backgroundImage = img;
+                    redrawCanvas();
+                    
+                    document.getElementById('fileInfo').style.display = 'block';
+                    document.getElementById('fileInfo').textContent = `Caricato PDF: ${file.name} (Pagina 1)`;
+                };
+                img.src = tempCanvas.toDataURL();
+                
+            } catch (error) {
+                alert('Errore nel caricamento del PDF: ' + error.message);
+            }
+        }
+
+        // Funzione per ridisegnare il canvas con l'immagine di sfondo
+        function redrawCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (backgroundImage && !hasTransparentBackground) {
+                ctx.drawImage(backgroundImage, 0, 0, canvas.width, canvas.height);
+            }
+        }
+
         // Funzione per impostare lo sfondo
         function setCanvasBackground() {
             if (hasTransparentBackground) {
-                // Crea pattern a scacchiera per mostrare la trasparenza
                 canvas.style.background = `
                     linear-gradient(45deg, #f0f0f0 25%, transparent 25%), 
                     linear-gradient(-45deg, #f0f0f0 25%, transparent 25%), 
@@ -331,10 +478,42 @@
             } else {
                 canvas.style.background = 'white';
             }
+            redrawCanvas();
         }
 
         // Inizializza sfondo
         setCanvasBackground();
+
+        // Event listener per caricamento file
+        document.getElementById('uploadBtn').addEventListener('click', () => {
+            document.getElementById('fileInput').click();
+        });
+
+        document.getElementById('fileInput').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const fileType = file.type;
+            
+            if (fileType.startsWith('image/')) {
+                loadImage(file);
+            } else if (fileType === 'application/pdf') {
+                // Aspetta che PDF.js sia caricato
+                if (typeof pdfjsLib === 'undefined') {
+                    setTimeout(() => {
+                        if (typeof pdfjsLib !== 'undefined') {
+                            loadPDF(file);
+                        } else {
+                            alert('Errore nel caricamento del modulo PDF. Riprova.');
+                        }
+                    }, 1000);
+                } else {
+                    loadPDF(file);
+                }
+            } else {
+                alert('Formato file non supportato. Usa JPG, PNG o PDF.');
+            }
+        });
 
         // Event listeners per strumenti
         document.querySelectorAll('.tool-btn').forEach(btn => {
@@ -343,7 +522,101 @@
                 e.target.classList.add('active');
                 currentTool = e.target.dataset.tool;
                 updateCursor();
+                
+                // Rimuovi input testo se presente
+                if (textInput) {
+                    textInput.remove();
+                    textInput = null;
+                    isTyping = false;
+                }
+                
+                // Nascondi azioni lasso se si cambia strumento
+                if (currentTool !== 'lasso' && currentTool !== 'select') {
+                    clearLassoSelection();
+                }
             });
+        });
+
+        // Event listeners per azioni lasso
+        document.getElementById('cropSelection').addEventListener('click', () => {
+            if (selectedImageData) {
+                // Crea nuovo canvas con solo la selezione
+                const newCanvas = document.createElement('canvas');
+                const newCtx = newCanvas.getContext('2d');
+                
+                if (currentTool === 'lasso' && selectedImageData.canvas) {
+                    newCanvas.width = selectedImageData.width;
+                    newCanvas.height = selectedImageData.height;
+                    newCtx.drawImage(selectedImageData.canvas, 0, 0);
+                } else if (currentTool === 'select' && selectedImageData.imageData) {
+                    newCanvas.width = selectedImageData.width;
+                    newCanvas.height = selectedImageData.height;
+                    newCtx.putImageData(selectedImageData.imageData, 0, 0);
+                }
+                
+                // Sostituisci il canvas principale con la selezione
+                canvas.width = newCanvas.width;
+                canvas.height = newCanvas.height;
+                canvas.style.width = Math.min(newCanvas.width, 800) + 'px';
+                canvas.style.height = Math.min(newCanvas.height, 600) + 'px';
+                
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(newCanvas, 0, 0);
+                
+                clearLassoSelection();
+            }
+        });
+
+        document.getElementById('deleteSelection').addEventListener('click', () => {
+            if (selectedImageData) {
+                if (currentTool === 'lasso') {
+                    // Cancella area del lasso
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.moveTo(lassoPath[0].x, lassoPath[0].y);
+                    for (let i = 1; i < lassoPath.length; i++) {
+                        ctx.lineTo(lassoPath[i].x, lassoPath[i].y);
+                    }
+                    ctx.closePath();
+                    ctx.clip();
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.restore();
+                    redrawCanvas();
+                } else if (currentTool === 'select') {
+                    // Cancella area rettangolare
+                    ctx.clearRect(selectedImageData.x, selectedImageData.y, selectedImageData.width, selectedImageData.height);
+                }
+                
+                clearLassoSelection();
+            }
+        });
+
+        document.getElementById('copySelection').addEventListener('click', () => {
+            if (selectedImageData) {
+                let dataUrl;
+                
+                if (currentTool === 'lasso' && selectedImageData.canvas) {
+                    dataUrl = selectedImageData.canvas.toDataURL();
+                } else if (currentTool === 'select' && selectedImageData.imageData) {
+                    const tempCanvas = document.createElement('canvas');
+                    const tempCtx = tempCanvas.getContext('2d');
+                    tempCanvas.width = selectedImageData.width;
+                    tempCanvas.height = selectedImageData.height;
+                    tempCtx.putImageData(selectedImageData.imageData, 0, 0);
+                    dataUrl = tempCanvas.toDataURL();
+                }
+                
+                if (dataUrl) {
+                    const link = document.createElement('a');
+                    link.download = 'selezione.png';
+                    link.href = dataUrl;
+                    link.click();
+                }
+            }
+        });
+
+        document.getElementById('clearSelection').addEventListener('click', () => {
+            clearLassoSelection();
         });
 
         // Event listeners per colori
@@ -374,19 +647,166 @@
 
         // Funzione per aggiornare il cursore
         function updateCursor() {
-            if (currentTool === 'brush') {
-                canvas.style.cursor = 'crosshair';
-            } else {
-                canvas.style.cursor = 'crosshair';
+            switch(currentTool) {
+                case 'brush':
+                    canvas.style.cursor = 'crosshair';
+                    break;
+                case 'eraser':
+                    canvas.style.cursor = 'grab';
+                    break;
+                case 'text':
+                    canvas.style.cursor = 'text';
+                    break;
+                case 'lasso':
+                    canvas.style.cursor = 'crosshair';
+                    break;
+                case 'select':
+                    canvas.style.cursor = 'crosshair';
+                    break;
+                default:
+                    canvas.style.cursor = 'crosshair';
             }
+        }
+
+        // Funzioni per il lasso
+        function drawLassoPath() {
+            if (!overlayCtx || lassoPath.length < 2) return;
+            
+            overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            overlayCtx.strokeStyle = '#ff4444';
+            overlayCtx.lineWidth = 2;
+            overlayCtx.setLineDash([5, 5]);
+            
+            overlayCtx.beginPath();
+            overlayCtx.moveTo(lassoPath[0].x, lassoPath[0].y);
+            
+            for (let i = 1; i < lassoPath.length; i++) {
+                overlayCtx.lineTo(lassoPath[i].x, lassoPath[i].y);
+            }
+            
+            if (lassoPath.length > 2) {
+                overlayCtx.closePath();
+            }
+            
+            overlayCtx.stroke();
+        }
+
+        function isPointInLasso(x, y) {
+            if (lassoPath.length < 3) return false;
+            
+            let inside = false;
+            for (let i = 0, j = lassoPath.length - 1; i < lassoPath.length; j = i++) {
+                if (((lassoPath[i].y > y) !== (lassoPath[j].y > y)) &&
+                    (x < (lassoPath[j].x - lassoPath[i].x) * (y - lassoPath[i].y) / (lassoPath[j].y - lassoPath[i].y) + lassoPath[i].x)) {
+                    inside = !inside;
+                }
+            }
+            return inside;
+        }
+
+        function getLassoSelection() {
+            if (lassoPath.length < 3) return null;
+            
+            // Trova i bounds della selezione
+            let minX = lassoPath[0].x, maxX = lassoPath[0].x;
+            let minY = lassoPath[0].y, maxY = lassoPath[0].y;
+            
+            for (let point of lassoPath) {
+                minX = Math.min(minX, point.x);
+                maxX = Math.max(maxX, point.x);
+                minY = Math.min(minY, point.y);
+                maxY = Math.max(maxY, point.y);
+            }
+            
+            const width = maxX - minX;
+            const height = maxY - minY;
+            
+            if (width <= 0 || height <= 0) return null;
+            
+            // Crea canvas temporaneo per la selezione
+            const tempCanvas = document.createElement('canvas');
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCanvas.width = width;
+            tempCanvas.height = height;
+            
+            // Ottieni i dati dell'immagine originale
+            const imageData = ctx.getImageData(minX, minY, width, height);
+            const data = imageData.data;
+            
+            // Crea nuovi dati dell'immagine con trasparenza per le aree non selezionate
+            const newData = tempCtx.createImageData(width, height);
+            
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const index = (y * width + x) * 4;
+                    const absoluteX = minX + x;
+                    const absoluteY = minY + y;
+                    
+                    if (isPointInLasso(absoluteX, absoluteY)) {
+                        newData.data[index] = data[index];         // R
+                        newData.data[index + 1] = data[index + 1]; // G
+                        newData.data[index + 2] = data[index + 2]; // B
+                        newData.data[index + 3] = data[index + 3]; // A
+                    } else {
+                        newData.data[index + 3] = 0; // Trasparente
+                    }
+                }
+            }
+            
+            tempCtx.putImageData(newData, 0, 0);
+            
+            return {
+                canvas: tempCanvas,
+                x: minX,
+                y: minY,
+                width: width,
+                height: height
+            };
+        }
+
+        function clearLassoSelection() {
+            lassoPath = [];
+            isLassoActive = false;
+            selectionBounds = null;
+            selectedImageData = null;
+            
+            if (overlayCtx) {
+                overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            }
+            
+            document.getElementById('lassoActions').style.display = 'none';
         }
 
         // Funzioni di disegno
         function startDrawing(e) {
-            isDrawing = true;
+            if (isTyping) return;
+            
             const rect = canvas.getBoundingClientRect();
             startX = e.clientX - rect.left;
             startY = e.clientY - rect.top;
+
+            // Gestione strumento lasso
+            if (currentTool === 'lasso') {
+                createOverlayCanvas();
+                lassoPath = [{x: startX, y: startY}];
+                isLassoActive = true;
+                return;
+            }
+
+            // Gestione selezione rettangolare
+            if (currentTool === 'select') {
+                createOverlayCanvas();
+                isDrawing = true;
+                return;
+            }
+            
+            isDrawing = true;
+
+            // Gestione strumento testo
+            if (currentTool === 'text') {
+                createTextInput(startX, startY);
+                return;
+            }
 
             ctx.globalAlpha = opacity / 100;
             ctx.strokeStyle = currentColor;
@@ -394,36 +814,100 @@
             ctx.lineWidth = brushSize;
 
             if (currentTool === 'brush') {
+                ctx.globalCompositeOperation = 'source-over';
+                ctx.beginPath();
+                ctx.moveTo(startX, startY);
+            } else if (currentTool === 'eraser') {
+                ctx.globalCompositeOperation = 'destination-out';
                 ctx.beginPath();
                 ctx.moveTo(startX, startY);
             }
         }
 
         function draw(e) {
-            if (!isDrawing) return;
-
             const rect = canvas.getBoundingClientRect();
             const currentX = e.clientX - rect.left;
             const currentY = e.clientY - rect.top;
 
-            if (currentTool === 'brush') {
+            // Gestione lasso
+            if (currentTool === 'lasso' && isLassoActive) {
+                lassoPath.push({x: currentX, y: currentY});
+                drawLassoPath();
+                return;
+            }
+
+            // Gestione selezione rettangolare
+            if (currentTool === 'select' && isDrawing) {
+                overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+                overlayCtx.strokeStyle = '#ff4444';
+                overlayCtx.lineWidth = 2;
+                overlayCtx.setLineDash([5, 5]);
+                overlayCtx.strokeRect(startX, startY, currentX - startX, currentY - startY);
+                return;
+            }
+
+            if (!isDrawing || isTyping) return;
+
+            if (currentTool === 'brush' || currentTool === 'eraser') {
                 ctx.lineTo(currentX, currentY);
                 ctx.stroke();
             }
         }
 
         function stopDrawing(e) {
-            if (!isDrawing) return;
-            isDrawing = false;
-
             const rect = canvas.getBoundingClientRect();
             const endX = e.clientX - rect.left;
             const endY = e.clientY - rect.top;
+
+            // Gestione fine lasso
+            if (currentTool === 'lasso' && isLassoActive) {
+                if (lassoPath.length > 2) {
+                    // Chiudi il lasso collegando l'ultimo punto al primo
+                    lassoPath.push(lassoPath[0]);
+                    drawLassoPath();
+                    
+                    selectedImageData = getLassoSelection();
+                    if (selectedImageData) {
+                        document.getElementById('lassoActions').style.display = 'block';
+                    }
+                }
+                return;
+            }
+
+            // Gestione fine selezione rettangolare
+            if (currentTool === 'select' && isDrawing) {
+                isDrawing = false;
+                
+                const width = Math.abs(endX - startX);
+                const height = Math.abs(endY - startY);
+                
+                if (width > 10 && height > 10) {
+                    const x = Math.min(startX, endX);
+                    const y = Math.min(startY, endY);
+                    
+                    selectionBounds = {x, y, width, height};
+                    selectedImageData = {
+                        canvas: null,
+                        x: x,
+                        y: y,
+                        width: width,
+                        height: height,
+                        imageData: ctx.getImageData(x, y, width, height)
+                    };
+                    
+                    document.getElementById('lassoActions').style.display = 'block';
+                }
+                return;
+            }
+
+            if (!isDrawing || isTyping) return;
+            isDrawing = false;
 
             ctx.globalAlpha = opacity / 100;
             ctx.strokeStyle = currentColor;
             ctx.fillStyle = currentColor;
             ctx.lineWidth = brushSize;
+            ctx.globalCompositeOperation = 'source-over';
 
             switch (currentTool) {
                 case 'line':
@@ -448,6 +932,62 @@
                     ctx.stroke();
                     break;
             }
+        }
+
+        // Funzione per creare input testo
+        function createTextInput(x, y) {
+            if (textInput) {
+                textInput.remove();
+            }
+            
+            isTyping = true;
+            textInput = document.createElement('input');
+            textInput.type = 'text';
+            textInput.style.position = 'absolute';
+            textInput.style.left = (canvas.getBoundingClientRect().left + x) + 'px';
+            textInput.style.top = (canvas.getBoundingClientRect().top + y) + 'px';
+            textInput.style.fontSize = brushSize + 'px';
+            textInput.style.color = currentColor;
+            textInput.style.background = 'transparent';
+            textInput.style.border = '1px dashed #ccc';
+            textInput.style.outline = 'none';
+            textInput.style.zIndex = '1000';
+            
+            document.body.appendChild(textInput);
+            textInput.focus();
+            
+            textInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    const text = textInput.value;
+                    if (text.trim()) {
+                        ctx.globalAlpha = opacity / 100;
+                        ctx.fillStyle = currentColor;
+                        ctx.font = `${brushSize}px Arial`;
+                        ctx.fillText(text, x, y);
+                    }
+                    textInput.remove();
+                    textInput = null;
+                    isTyping = false;
+                }
+                if (e.key === 'Escape') {
+                    textInput.remove();
+                    textInput = null;
+                    isTyping = false;
+                }
+            });
+            
+            textInput.addEventListener('blur', () => {
+                const text = textInput.value;
+                if (text.trim()) {
+                    ctx.globalAlpha = opacity / 100;
+                    ctx.fillStyle = currentColor;
+                    ctx.font = `${brushSize}px Arial`;
+                    ctx.fillText(text, x, y);
+                }
+                textInput.remove();
+                textInput = null;
+                isTyping = false;
+            });
         }
 
         // Event listeners per il canvas
@@ -487,6 +1027,7 @@
         document.getElementById('clearCanvas').addEventListener('click', () => {
             if (confirm('Sei sicuro di voler cancellare tutto il disegno?')) {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
+                redrawCanvas();
             }
         });
 
@@ -514,10 +1055,10 @@
             link.download = hasTransparentBackground ? 'mio-disegno-trasparente.png' : 'mio-disegno.png';
             
             if (hasTransparentBackground) {
-                // Salva con sfondo trasparente
+                // Salva con sfondo trasparente (solo le modifiche)
                 link.href = canvas.toDataURL('image/png');
             } else {
-                // Salva con sfondo bianco
+                // Salva con sfondo bianco o immagine di base
                 const tempCanvas = document.createElement('canvas');
                 const tempCtx = tempCanvas.getContext('2d');
                 tempCanvas.width = canvas.width;
@@ -527,7 +1068,12 @@
                 tempCtx.fillStyle = 'white';
                 tempCtx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
                 
-                // Disegna il contenuto originale sopra
+                // Disegna l'immagine di sfondo se presente
+                if (backgroundImage) {
+                    tempCtx.drawImage(backgroundImage, 0, 0, tempCanvas.width, tempCanvas.height);
+                }
+                
+                // Disegna il contenuto del canvas principale sopra
                 tempCtx.drawImage(canvas, 0, 0);
                 
                 link.href = tempCanvas.toDataURL('image/png');
